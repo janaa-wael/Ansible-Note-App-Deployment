@@ -1,0 +1,5 @@
+---
+# Master Playbook for Note-Taking App
+# This will run all the playbooks in sequence
+
+- import_playbook: setup-noteapp.yml

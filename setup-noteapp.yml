@@ -1,0 +1,118 @@
+---
+- name: Setup Note-Taking Application
+  hosts: webserver
+  become: yes
+  tasks:
+    # 1. Update system packages
+    - name: Update all packages
+      dnf:
+        name: '*'
+        state: latest
+      when: ansible_os_family == "RedHat"
+
+    # 2. Install required packages
+    - name: Install required packages
+      dnf:
+        name:
+          - python3
+          - python3-pip
+          - git
+          - mariadb105
+          - mariadb105-server
+        state: present
+
+    # 3. Start MariaDB service
+    - name: Start and enable MariaDB
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    # 4. Install Python packages
+    - name: Install Flask and PyMySQL
+      pip:
+        name:
+          - flask
+          - pymysql
+        state: present
+
+    # 5. Create database
+    - name: Create notes database
+      mysql_db:
+        name: notes_app
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    # 6. Create database user
+    - name: Create database user
+      mysql_user:
+        name: app_user
+        password: AppPass123!
+        priv: 'notes_app.*:ALL'
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    # 7. Create table if not exists
+    - name: Create notes table
+      mysql_query:
+        login_db: notes_app
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: |
+          CREATE TABLE IF NOT EXISTS notes (
+            id INT NOT NULL AUTO_INCREMENT,
+            title VARCHAR(200) NOT NULL DEFAULT 'Untitled',
+            note_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+          )
+
+    # 8. Clone or update app repository
+    - name: Clone/Update app repository
+      git:
+        repo: https://github.com/janaa-wael/AWS-Note-Taking-App.git
+        dest: /home/ec2-user/note-app
+        version: main
+        force: yes
+      become_user: ec2-user
+
+    # 9. Create systemd service file
+    - name: Create systemd service
+      copy:
+        content: |
+          [Unit]
+          Description=Note Taking Flask App
+          After=network.target mariadb.service
+
+          [Service]
+          User=ec2-user
+          WorkingDirectory=/home/ec2-user/note-app
+          ExecStart=/usr/bin/python3 /home/ec2-user/note-app/app.py
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/noteapp.service
+        mode: '0644'
+
+    # 10. Reload systemd and restart service
+    - name: Reload systemd and restart app
+      systemd:
+        name: noteapp
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    # 11. Check if app is running
+    - name: Check if app is running
+      uri:
+        url: http://localhost:5000
+        status_code: 200
+      register: app_status
+      retries: 5
+      delay: 3
+      until: app_status.status == 200
+
+    - name: Display success message
+      debug:
+        msg: "✅ App is running at http://176.34.65.27:5000"
