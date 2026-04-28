@@ -6,6 +6,22 @@
   become: yes
   gather_facts: yes
   
+  handlers:
+    - name: restart mariadb
+      systemd:
+        name: mariadb
+        state: restarted
+
+    - name: restart noteapp
+      systemd:
+        name: "{{ app_name }}"
+        state: restarted
+        daemon_reload: yes
+
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+  
   tasks:
     # System Setup
     - name: Update all packages
@@ -13,6 +29,7 @@
         name: '*'
         state: latest
       when: ansible_os_family == "RedHat"
+      notify: restart mariadb
 
     - name: Install required packages
       dnf:
@@ -73,6 +90,7 @@
         version: "{{ repo_version }}"
         force: yes
       become_user: "{{ app_user }}"
+      notify: restart noteapp
 
     - name: Create systemd service file
       copy:
@@ -92,13 +110,7 @@
           WantedBy=multi-user.target
         dest: "/etc/systemd/system/{{ app_name }}.service"
         mode: '0644'
-
-    - name: Reload systemd and restart app
-      systemd:
-        name: "{{ app_name }}"
-        state: restarted
-        enabled: yes
-        daemon_reload: yes
+      notify: reload systemd
 
     - name: Wait for app to start
       wait_for:

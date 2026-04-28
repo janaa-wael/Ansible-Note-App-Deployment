@@ -1,0 +1,43 @@
+---
+- name: Use Templates for Better Configuration
+  hosts: webserver
+  vars_files:
+    - vars.yml
+  become: yes
+  
+  tasks:
+    - name: Create systemd service from template
+      template:
+        src: templates/noteapp.service.j2
+        dest: "/etc/systemd/system/{{ app_name }}.service"
+        mode: '0644'
+      notify: reload systemd
+
+    - name: Create backup script from template
+      template:
+        src: templates/backup_script.sh.j2
+        dest: /usr/local/bin/backup_notes.sh
+        mode: '0755'
+
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Schedule backup cron job
+      cron:
+        name: "Daily {{ app_name }} backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/backup_notes.sh >> /var/log/backup.log 2>&1"
+
+  handlers:
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+    
+    - name: restart noteapp
+      systemd:
+        name: "{{ app_name }}"
+        state: restarted

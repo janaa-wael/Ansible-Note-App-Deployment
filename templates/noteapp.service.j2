@@ -1,0 +1,22 @@
+[Unit]
+Description={{ app_name }} Flask App
+After=network.target mariadb.service
+Documentation=https://github.com/{{ app_user }}/{{ app_name }}
+
+[Service]
+Type=simple
+User={{ app_user }}
+Group={{ app_user }}
+WorkingDirectory={{ app_dir }}
+Environment="FLASK_ENV=production"
+Environment="DB_HOST=localhost"
+Environment="DB_USER={{ db_user }}"
+Environment="DB_PASSWORD={{ db_password }}"
+ExecStart=/usr/bin/python3 {{ app_dir }}/app.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
