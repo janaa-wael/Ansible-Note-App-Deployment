@@ -1,0 +1,22 @@
+---
+# Application Variables
+app_name: noteapp
+app_port: 5000
+app_user: ec2-user
+app_dir: /home/ec2-user/note-app
+
+# GitHub Repository
+repo_url: https://github.com/janaa-wael/AWS-Note-Taking-App.git
+repo_version: main
+
+# Database Variables
+db_name: notes_app
+db_user: app_user
+db_password: AppPass123!
+
+# Server Variables
+server_ip: 176.34.65.27
+
+# Backup Variables
+backup_dir: /backup
+backup_retention_days: 7

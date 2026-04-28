@@ -1,5 +1,116 @@
 ---
-# Master Playbook for Note-Taking App
-# This will run all the playbooks in sequence
+- name: Deploy Note-Taking Application
+  hosts: webserver
+  vars_files:
+    - vars.yml
+  become: yes
+  gather_facts: yes
+  
+  tasks:
+    # System Setup
+    - name: Update all packages
+      dnf:
+        name: '*'
+        state: latest
+      when: ansible_os_family == "RedHat"
 
-- import_playbook: setup-noteapp.yml
+    - name: Install required packages
+      dnf:
+        name:
+          - python3
+          - python3-pip
+          - git
+          - mariadb105
+          - mariadb105-server
+        state: present
+
+    - name: Start and enable MariaDB
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+
+    - name: Install Python packages
+      pip:
+        name:
+          - flask
+          - pymysql
+        state: present
+
+    # Database Setup
+    - name: Create database
+      mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    - name: Create database user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: '{{ db_name }}.*:ALL'
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+
+    - name: Create notes table
+      mysql_query:
+        login_db: "{{ db_name }}"
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: |
+          CREATE TABLE IF NOT EXISTS notes (
+            id INT NOT NULL AUTO_INCREMENT,
+            title VARCHAR(200) NOT NULL DEFAULT 'Untitled',
+            note_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+          )
+
+    # Application Deployment
+    - name: Clone or update repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: "{{ repo_version }}"
+        force: yes
+      become_user: "{{ app_user }}"
+
+    - name: Create systemd service file
+      copy:
+        content: |
+          [Unit]
+          Description={{ app_name }} Flask App
+          After=network.target mariadb.service
+
+          [Service]
+          User={{ app_user }}
+          WorkingDirectory={{ app_dir }}
+          ExecStart=/usr/bin/python3 {{ app_dir }}/app.py
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: "/etc/systemd/system/{{ app_name }}.service"
+        mode: '0644'
+
+    - name: Reload systemd and restart app
+      systemd:
+        name: "{{ app_name }}"
+        state: restarted
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for app to start
+      wait_for:
+        port: "{{ app_port }}"
+        host: localhost
+        delay: 3
+        timeout: 30
+
+    - name: Display success message
+      debug:
+        msg: |
+          ✅ Application successfully deployed!
+          📝 Access your app at: http://{{ server_ip }}:{{ app_port }}
+          🗄️ Database: {{ db_name }}
+          🔄 Service: {{ app_name }}
