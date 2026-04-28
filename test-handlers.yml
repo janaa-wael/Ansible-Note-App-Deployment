@@ -1,0 +1,46 @@
+---
+- name: Demonstrate How Handlers Work
+  hosts: webserver
+  become: yes
+
+  handlers:
+    - name: restart noteapp
+      systemd:
+        name: noteapp
+        state: restarted
+      listen: "restart application"
+
+  tasks:
+    # This will NOT notify the handler (nothing changed)
+    - name: Check if noteapp is running (no notification)
+      command: systemctl is-active noteapp
+      register: status
+      changed_when: false
+      
+    - name: Show current status
+      debug:
+        msg: "Noteapp status: {{ status.stdout }}"
+
+    # This WILL notify the handler (something changed)
+    - name: Create a timestamp file (this CHANGE triggers handler)
+      copy:
+        content: "Last deployment: {{ ansible_date_time.iso8601 }}"
+        dest: /home/ec2-user/deploy_timestamp.txt
+        owner: ec2-user
+        mode: '0644'
+      notify: "restart application"    # ← This triggers the handler
+      
+    - name: Show handler explanation
+      debug:
+        msg: |
+          ====================================
+          HANDLER DEMONSTRATION
+          ====================================
+          The 'copy' task above CHANGED a file.
+          It sent a NOTIFICATION to the handler.
+          The handler will run at the END of all tasks.
+          
+          If the file already existed and didn't change,
+          NO notification would be sent, and the handler
+          would NOT run.
+          ====================================

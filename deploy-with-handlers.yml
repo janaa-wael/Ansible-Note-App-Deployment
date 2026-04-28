@@ -1,0 +1,223 @@
+---
+- name: Full Deployment with Handlers
+  hosts: webserver
+  vars_files:
+    - vars.yml
+  become: yes
+  gather_facts: yes
+
+  # ============================================
+  # HANDLERS - Only run when notified
+  # ============================================
+  handlers:
+    # Restart MariaDB only if database config changed
+    - name: restart mariadb
+      systemd:
+        name: mariadb
+        state: restarted
+      listen: "restart database"
+
+    # Reload systemd when service files change
+    - name: reload systemd
+      systemd:
+        daemon_reload: yes
+      listen: "reload systemd config"
+
+    # Restart the note app (most common handler)
+    - name: restart noteapp
+      systemd:
+        name: "{{ app_name }}"
+        state: restarted
+        daemon_reload: yes
+      listen: "restart application"
+
+    # Restart cron service after backup schedule changes
+    - name: restart cron
+      systemd:
+        name: crond
+        state: restarted
+      listen: "restart cron service"
+
+  # ============================================
+  # TASKS
+  # ============================================
+  tasks:
+    # ---------- SYSTEM SETUP ----------
+    - name: Update all packages
+      dnf:
+        name: '*'
+        state: latest
+      when: ansible_os_family == "RedHat"
+      tags: [system, setup]
+
+    - name: Install required packages
+      dnf:
+        name:
+          - python3
+          - python3-pip
+          - git
+          - mariadb105
+          - mariadb105-server
+          - cronie
+        state: present
+      tags: [system, setup]
+
+    - name: Start and enable MariaDB
+      systemd:
+        name: mariadb
+        state: started
+        enabled: yes
+      tags: [database, setup]
+
+    - name: Start and enable cron daemon
+      systemd:
+        name: crond
+        state: started
+        enabled: yes
+      tags: [system, setup]
+
+    - name: Install Python packages
+      pip:
+        name:
+          - flask
+          - pymysql
+        state: present
+      tags: [system, setup]
+
+    # ---------- DATABASE SETUP ----------
+    - name: Create database
+      mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      tags: [database]
+
+    - name: Create database user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: '{{ db_name }}.*:ALL'
+        state: present
+        login_unix_socket: /var/lib/mysql/mysql.sock
+      tags: [database]
+
+    - name: Create notes table
+      mysql_query:
+        login_db: "{{ db_name }}"
+        login_unix_socket: /var/lib/mysql/mysql.sock
+        query: |
+          CREATE TABLE IF NOT EXISTS notes (
+            id INT NOT NULL AUTO_INCREMENT,
+            title VARCHAR(200) NOT NULL DEFAULT 'Untitled',
+            note_text TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id)
+          )
+      tags: [database]
+
+    # ---------- APPLICATION DEPLOYMENT ----------
+    - name: Clone or update repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: "{{ repo_version }}"
+        force: yes
+      become_user: "{{ app_user }}"
+      register: git_result
+      notify: "restart application"    # ← NOTIFY HANDLER
+      tags: [deploy, update]
+
+    - name: Show git update status
+      debug:
+        msg: "Git updated: {{ git_result.changed }}"
+      tags: [deploy]
+
+    # ---------- SERVICE CONFIGURATION ----------
+    - name: Create systemd service file
+      template:
+        src: templates/noteapp.service.j2
+        dest: "/etc/systemd/system/{{ app_name }}.service"
+        mode: '0644'
+      register: service_file_result
+      notify: "reload systemd config"   # ← NOTIFY HANDLER
+      tags: [deploy]
+
+    - name: Show service file status
+      debug:
+        msg: "Service file changed: {{ service_file_result.changed }}"
+      tags: [deploy]
+
+    # ---------- BACKUP SETUP ----------
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+      tags: [backup]
+
+    - name: Create backup script
+      template:
+        src: templates/backup_script.sh.j2
+        dest: /usr/local/bin/backup_notes.sh
+        mode: '0755'
+      register: backup_script_result
+      tags: [backup]
+
+    - name: Schedule backup cron job
+      cron:
+        name: "Daily {{ app_name }} backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/backup_notes.sh >> /var/log/backup.log 2>&1"
+        state: present
+      register: cron_result
+      notify: "restart cron service"    # ← NOTIFY HANDLER
+      tags: [backup]
+
+    # ---------- HEALTH CHECKS ----------
+    - name: Wait for app to start
+      wait_for:
+        port: "{{ app_port }}"
+        host: localhost
+        delay: 5
+        timeout: 30
+      tags: [verify]
+
+    - name: Verify app is responding
+      uri:
+        url: "http://localhost:{{ app_port }}"
+        status_code: 200
+      register: app_health
+      tags: [verify]
+
+    # ---------- SUMMARY ----------
+    - name: Display deployment summary
+      debug:
+        msg: |
+          ====================================
+          ✅ DEPLOYMENT COMPLETE
+          ====================================
+          📝 App URL: http://{{ server_ip }}:{{ app_port }}
+          🗄️ Database: {{ db_name }}
+          💾 Backup Dir: {{ backup_dir }}
+          ⏰ Backup Schedule: Daily at 2 AM
+          🔄 Services Managed: systemd
+          
+          Handlers that would run if changes detected:
+          - restart mariadb
+          - reload systemd  
+          - restart noteapp
+          - restart cron
+          ====================================
+      tags: [verify]
+
+  # ============================================
+  # POST-TASKS (Always run at end)
+  # ============================================
+  post_tasks:
+    - name: Ensure noteapp is running after all changes
+      systemd:
+        name: "{{ app_name }}"
+        state: started
+        enabled: yes
+      tags: [always]
